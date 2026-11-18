@@ -1,0 +1,182 @@
+# =============================================================================
+# EvalPipeline Pro — CI/CD regression gate
+#
+# Job 1 (unit-tests): ruff + fast unit tests on every PR / push to main.
+# Job 2 (eval-gate):  on PRs touching the RAG/eval code, seed a pgvector service
+#                     container, run the live LLM-as-a-Judge suite and FAIL the build
+#                     if any metric average drops below EVAL_QUALITY_THRESHOLD (0.85)
+#                     or any case errors (fail-closed).
+#
+# Required repository secret:  LLM_API_KEY   # TODO(apikey): Settings -> Secrets -> Actions
+# NOTE: secrets are not exposed to PRs from forks; the gate fails fast with a clear error there.
+# =============================================================================
+name: Eval Gate
+
+on:
+  pull_request:
+    paths:
+      - "app/rag/**"
+      - "app/evals/**"
+      - "app/schemas/**"
+      - "scripts/seed_*.py"
+      - "requirements*.txt"
+      - ".github/workflows/eval_gate.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      quality_threshold:
+        description: "Minimum average score per metric (0-1)"
+        default: "0.85"
+        required: false
+      prompt_version:
+        description: "Prompt version to evaluate (v1 | v0-naive)"
+        default: "v1"
+        required: false
+
+concurrency:
+  group: eval-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.9"
+  HF_HOME: ${{ github.workspace }}/.hf_cache
+  SENTENCE_TRANSFORMERS_HOME: ${{ github.workspace }}/.hf_cache
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  # --------------------------------------------------------------------------- lint + unit
+  unit-tests:
+    name: Lint + unit tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        python: ["3.9"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies (CPU-only torch first, keeps the resolver away from CUDA wheels)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
+          pip install -r requirements-dev.txt
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Unit tests
+        env:
+          ENVIRONMENT: test
+        run: pytest -m unit --cov=app --cov-report=term-missing
+
+  # --------------------------------------------------------------------------- live eval gate
+  eval-gate:
+    name: LLM-as-a-Judge regression gate
+    needs: unit-tests
+    # Skip on pushes to main that did not touch RAG code is handled by `paths` on PRs; pushes
+    # always run so main's history gets a data point per merge.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: evalpipeline
+          POSTGRES_PASSWORD: ci_only_password      # throwaway, CI service container only
+          POSTGRES_DB: evalpipeline
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U evalpipeline -d evalpipeline"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      ENVIRONMENT: ci
+      LOG_LEVEL: INFO
+      # --- database (service container above) -------------------------------- TODO(database)
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: evalpipeline
+      POSTGRES_PASSWORD: ci_only_password
+      POSTGRES_DB: evalpipeline
+      # --- LLM provider ------------------------------------------------------- TODO(apikey)
+      LLM_PROVIDER: groq
+      LLM_BASE_URL: https://api.groq.com/openai/v1
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_MODEL: llama-3.1-8b-instant
+      JUDGE_MODEL: llama-3.3-70b-versatile
+      LLM_MAX_RETRIES: "4"
+      # --- embeddings (local, no key) ----------------------------------------
+      EMBEDDING_PROVIDER: local
+      EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      EMBEDDING_DIM: "384"
+      # --- gate configuration ------------------------------------------------
+      PROMPT_VERSION: ${{ github.event.inputs.prompt_version || 'v1' }}
+      EVAL_QUALITY_THRESHOLD: ${{ github.event.inputs.quality_threshold || '0.85' }}
+      EVAL_MAX_CONCURRENCY: "3"            # gentle on free-tier rate limits
+      GIT_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EVAL_REPORT_PATH: reports/eval_report.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail fast if the LLM secret is missing
+        run: |
+          if [ -z "$LLM_API_KEY" ]; then
+            echo "::error::LLM_API_KEY secret is not set (or this is a fork PR). Add it under Settings → Secrets → Actions."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: .hf_cache
+          key: hf-${{ env.EMBEDDING_MODEL }}-v1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
+          pip install -r requirements-dev.txt
+
+      - name: Seed job listings + golden dataset
+        run: python -m scripts.seed_data --reset
+
+      - name: Run LLM-as-a-Judge regression suite
+        run: pytest -m regression -v -ra
+
+      - name: Publish run summary
+        if: always()
+        run: |
+          if [ -f reports/eval_summary.md ]; then
+            cat reports/eval_summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ❌ Eval gate did not produce a report" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-${{ github.run_id }}
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 30

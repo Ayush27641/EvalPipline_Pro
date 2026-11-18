@@ -1,0 +1,30 @@
+# EvalPipeline Pro — API runtime dependencies
+# Target interpreter: Python 3.9.x  (every pin below verified: Requires-Python allows 3.9)
+# NOTE: torch is installed CPU-only in the Dockerfile BEFORE this file so the multi-GB CUDA
+#       wheels are never pulled. On a bare machine `pip install -r requirements.txt` still
+#       works; it just resolves torch from PyPI.
+
+# --- Web / API ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# --- Database (async PostgreSQL + pgvector) ---
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+pgvector==0.3.6
+
+# --- Embeddings (local provider: sentence-transformers / all-MiniLM-L6-v2, 384-dim) ---
+numpy==2.0.2                 # last numpy line that supports Python 3.9
+torch==2.5.1                 # see Dockerfile for the CPU-only install step
+sentence-transformers==3.3.1
+
+# --- LLM generation + LLM-as-a-Judge (OpenAI-compatible: works for Groq and OpenAI) ---
+openai==1.59.7
+instructor==1.7.2            # strict Pydantic structured outputs with automatic re-ask on parse failure
+tenacity==9.0.0              # retry/backoff for provider rate limits
+
+# --- HTTP client (used by eval runner self-calls and tests) ---
+httpx==0.28.1

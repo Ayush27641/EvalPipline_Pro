@@ -1,0 +1,28 @@
+# Auto-generated: relaxed pins for Python 3.13 compatibility
+# (original requirements.txt targets Python 3.9)
+
+# --- Web / API ---
+fastapi>=0.115.6
+uvicorn[standard]>=0.34.0
+pydantic>=2.10.4
+pydantic-settings>=2.7.1
+python-dotenv>=1.0.1
+
+# --- Database (async PostgreSQL + pgvector) ---
+sqlalchemy[asyncio]>=2.0.36
+asyncpg>=0.30.0
+pgvector>=0.3.6
+
+# --- Embeddings (local provider) ---
+numpy>=2.0.2
+torch>=2.5.1
+sentence-transformers>=3.3.1
+
+# --- LLM generation + LLM-as-a-Judge ---
+openai>=1.59.7
+instructor>=1.7.2
+tenacity>=9.0.0
+
+# --- HTTP client ---
+httpx>=0.28.1
+

@@ -1,0 +1,36 @@
+# --- secrets / local config ---
+.env
+.env.*
+!.env.example
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# --- tooling caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- ML / data caches ---
+.hf_cache/
+.cache/
+*.parquet
+
+# --- docker / db ---
+pgdata/
+
+# --- editors / OS ---
+.idea/
+.vscode/
+.DS_Store
+
+# --- eval artifacts (CI writes the gate report here) ---
+reports/

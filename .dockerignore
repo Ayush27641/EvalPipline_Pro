@@ -1,0 +1,24 @@
+# Keep the build context small and secrets out of every image layer.
+.git
+.github
+.env
+.env.*
+!.env.example
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+.hf_cache
+.cache
+pgdata
+reports
+.idea
+.vscode
+.DS_Store
+*.md
+docker-compose*.yml

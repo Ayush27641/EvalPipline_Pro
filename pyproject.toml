@@ -1,0 +1,30 @@
+[project]
+name = "evalpipeline-pro"
+version = "0.1.0"
+description = "Automated LLM Output Quality & RAG Evaluation Suite (LLM-as-a-Judge, pgvector, CI regression gate)"
+requires-python = ">=3.9"
+
+# ------------------------------------------------------------------ pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+addopts = "-ra --strict-markers"
+markers = [
+  "unit: fast tests, no network / database",
+  "integration: needs the pgvector database",
+  "regression: live LLM eval gate (needs LLM_API_KEY + database) — run by .github/workflows/eval_gate.yml",
+]
+
+# ------------------------------------------------------------------ ruff
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+extend-exclude = [".venv", "build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
+ignore = ["B008"]   # FastAPI's `Depends()` in defaults is idiomatic
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "scripts", "tests"]

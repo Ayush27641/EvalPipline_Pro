@@ -1,0 +1,101 @@
+# =============================================================================
+# EvalPipeline Pro — local development stack
+#
+#   docker compose up -d --build              -> db + api  (http://localhost:8000/docs)
+#   docker compose --profile ui up -d --build -> + Streamlit dashboard (http://localhost:8501)
+#   docker compose exec api python -m scripts.seed_data   (Step 3)
+#   docker compose exec api pytest -m unit                (Step 4)
+#
+# All secrets/hosts come from `.env` (copy `.env.example`). Nothing sensitive lives here.
+# =============================================================================
+
+name: evalpipeline-pro
+
+services:
+  # --------------------------------------------------------------------------- PostgreSQL + pgvector
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: evalpipeline-db
+    restart: unless-stopped
+    environment:
+      # TODO(database): placeholders — set real values in .env (never commit .env)
+      POSTGRES_USER: ${POSTGRES_USER:-evalpipeline}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME}
+      POSTGRES_DB: ${POSTGRES_DB:-evalpipeline}
+    ports:
+      # Bound to loopback so the DB is reachable from host tools (psql, DBeaver) but not the LAN.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Runs once on first boot of an empty volume: CREATE EXTENSION vector
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-evalpipeline} -d ${POSTGRES_DB:-evalpipeline}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # --------------------------------------------------------------------------- FastAPI (RAG + Evals)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev                     # hot reload + pytest; use `target: api` for a prod-like image
+    container_name: evalpipeline-api
+    restart: unless-stopped
+    env_file:
+      # TODO(apikey): LLM_API_KEY etc. live here — see .env.example.
+      # `required: false` lets the stack boot on placeholder defaults before .env exists.
+      - path: .env
+        required: false
+    environment:
+      # Inside the compose network the DB host is the service name, not localhost.
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+      ENVIRONMENT: local
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    volumes:
+      # Live source for `uvicorn --reload`
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+      - ./tests:/app/tests
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      # Persist the downloaded embedding model (~90 MB) across container rebuilds
+      - hf_cache:/cache/hf
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # --------------------------------------------------------------------------- Streamlit dashboard (Step 5)
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dashboard
+    container_name: evalpipeline-dashboard
+    restart: unless-stopped
+    profiles: ["ui"]                  # opt-in until dashboard.py exists: docker compose --profile ui up
+    environment:
+      # TODO(hosting): point at the deployed API URL when the dashboard runs outside compose
+      API_BASE_URL: http://api:8000
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-8501}:8501"
+    volumes:
+      - ./dashboard.py:/app/dashboard.py:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  hf_cache:
